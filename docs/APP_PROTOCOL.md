@@ -244,3 +244,31 @@ The remaining work to capture from Linux is to replicate the sensor-register arm
 sequence (addresses/values are sensor-descriptor data in tcwbf) and pump the TYPE-0
 channel. Interrupt EP 0x83 is unused for image data in the stock driver (it polls
 bulk), so its silence is expected.
+
+## Raw-image scan trigger (the capture mechanism)
+
+The raw fingerprint image is NOT started by any "Ciao" command or the on-chip
+TYPE-6/4/5 path. It is a **vendor control transfer**, the same `bRequest=0x0c` used
+for the mode-switch, with a different `wIndex`:
+
+```
+mode-switch / command-mode kick :  40 0c  wValue=0100 wIndex=0400  data=00
+START raw scan                  :  40 0c  wValue=0100 wIndex=0601  data=00
+STOP  raw scan                  :  40 0c  wValue=0100 wIndex=0602  data=00
+```
+
+After START, the sensor front-end is armed (the firmware handles the analog
+front-end for PID 0x2020; the legacy per-register writes are dormant), and image
+lines stream as "Ciao" **type-0 DATA** frames on bulk EP 0x81 while a finger is on
+the sensor. The Ciao read path does not decrypt, so plaintext pixels arrive as-is.
+Sensor format is 8-bit grayscale, up to 508x508 at 508 dpi (format table indexes
+508x508 / 381x381 / 508x254 / 254x254 at 1/4/8 bpp).
+
+`tools/upek2020.py:scan_start()` / `scan_stop()` / `capture_image()` implement this.
+
+Verified: the `0x0601` control transfer is accepted by the device from Linux after
+the handshake. Live pixel capture is pending a physical swipe (a swipe sensor emits
+no data without a finger, so the bulk pipe is silent until a finger moves across).
+`'MVNS'` is a host-side property store, not a device command; and the Windows-init
+class requests (recipient OTHER, wIndex 3) that the stock driver issues stall on
+Linux but are not required for the scan trigger.

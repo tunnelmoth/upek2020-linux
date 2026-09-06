@@ -347,6 +347,42 @@ class Upek:
             dec, raw = self.cmd(raw_block(CONT_WORD, bytes([ack])), tmo=tmo)
         return None, blobs
 
+    # --- raw-image scan (vendor control 0x0c, verified scan-trigger opcode) ---
+    def scan_start(self):
+        """Arm the sensor front-end and begin raw-image streaming.
+        Vendor control OUT: bRequest 0x0c, wValue 0x0100, wIndex 0x0601.
+        (wIndex 0x0400 = command-mode kick, done in handshake; 0x0601 = START,
+        0x0602 = STOP.) After this, image lines arrive as "Ciao" type-0 frames on
+        EP 0x81 while a finger is on the sensor."""
+        self.d.ctrl_transfer(0x40, 0x0c, 0x0100, 0x0601, b"\x00", 1000)
+
+    def scan_stop(self):
+        self.d.ctrl_transfer(0x40, 0x0c, 0x0100, 0x0602, b"\x00", 1000)
+
+    def capture_image(self, timeout_s=20.0):
+        """Start a scan and collect raw-image bytes from EP 0x81 until timeout.
+        Returns the concatenated bulk payload (strip "Ciao" type-0 headers to get
+        pixels; sensor is 8-bit grayscale up to 508x508). A swipe must occur within
+        the window. NOTE: verified that 0x0601 is accepted; live pixel capture is
+        pending a physical swipe on hardware."""
+        self.scan_start()
+        buf = bytearray()
+        deadline = time.time() + timeout_s
+        try:
+            while time.time() < deadline:
+                try:
+                    r = bytes(self.d.read(0x81, 4096, 200))
+                    if r and len(r) != 2:
+                        buf += r
+                except usb.core.USBError:
+                    pass
+        finally:
+            try:
+                self.scan_stop()
+            except Exception:
+                pass
+        return bytes(buf)
+
     def close(self):
         try:
             usb.util.release_interface(self.d, 0)
