@@ -272,3 +272,46 @@ no data without a finger, so the bulk pipe is silent until a finger moves across
 `'MVNS'` is a host-side property store, not a device command; and the Windows-init
 class requests (recipient OTHER, wIndex 3) that the stock driver issues stall on
 Linux but are not required for the scan trigger.
+
+## Finger-detect / capture (definitive — the unresolved layer)
+
+Ground-truth correction from usbmon captures of the stock Windows driver (device
+147e:2020 in a passthrough VM):
+
+- **This PID is match-on-chip ONLY.** The raw-image path (`RawGrabber`, opcode
+  0x601, EP 0x81 pixel frames) is never bound for product code 0x602/0x702; low
+  byte 0x02 fails the `&5` RAW_IO gate. No pixels ever cross USB. The device does
+  on-chip enroll/verify/match; the real per-swipe data (when it exists) rides the
+  encrypted Ciao channel command responses, not any pixel stream.
+- The vendor status byte6 (`C0 04` reply) is a readiness *hint* (0x00 fresh, 0x07
+  after a clean re-enumeration), NOT a gate — captures happen at both values.
+- Front-end sensor-register writes (`40 0C wValue=0x0000 wIndex=<reg>`) are
+  host-side shadowed for this PID and never reach the bus — not a usable arm.
+- The per-capture arm is `40 0C wValue=0x0100 wIndex=0x0400`; the low-level
+  type-6/3/4/5 exchange is a once-per-session channel OPEN (type-3 payload is the
+  constant `01 00 00 00 c0` hello, never a finger frame).
+- **The finger detector is gated by USB selective-suspend + remote-wakeup**, set
+  by the WinUSB power policy `SetPowerPolicy(AUTO_SUSPEND=0x81, 1)` — a
+  host-stack/power-management action with NO packet on the wire. The chip's
+  hardware finger-detect only powers up while the device is suspend-capable and
+  reports a finger via USB remote wakeup / the interrupt endpoint status
+  (bit0-inverted).
+
+Implemented from Linux (device autosuspended, `power/wakeup=enabled`,
+`SET_FEATURE(DEVICE_REMOTE_WAKEUP)`, armed with `40 0C 0x0400`), a finger touch
+produced NO remote wakeup (dmesg shows none) and no status change. So the
+finger-detect does not trigger from a libusb userspace driver — it appears to
+need proper kernel-driver power management (and possibly the interrupt-endpoint
+wakeup source armed the way WinUSB does).
+
+**No ground truth of a successful capture exists**: every Windows enroll capture
+in hand aborts right after the crypto handshake (the WBF biometric unit never
+onlined — "secure component NOT_SUPPORTED" in the VM), so the sensor never
+actually scanned a finger, on Windows or Linux, in this setup.
+
+Bottom line: the entire crypto/transport/command protocol is reversed and works;
+the remaining blocker is the sensor's finger-detect, a driver-level USB
+power-management mechanism with no on-wire packet, for which there is also no
+working capture to replicate. A real driver (libfprint / kernel module)
+implementing the reversed protocol plus the suspend/remote-wakeup power policy is
+the path to a live capture.
