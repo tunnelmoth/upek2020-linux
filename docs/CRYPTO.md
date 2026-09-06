@@ -227,3 +227,30 @@ same live-instrumentation treatment that cracked the RSA: hook the Rijndael bloc
 operation in a running handshake to capture (key, plaintext, ciphertext) directly.
 This is the next concrete task; there is no cryptographic uncertainty left, only the
 channel's exact key schedule and framing.
+
+## SOLVED — the AES session channel
+
+Live instrumentation of the block cipher (the encrypt/decrypt routine, its round-key
+buffer, and the key-schedule input) plus offline verification settle the channel:
+
+- The channel cipher is **AES-128** (the T-table routine uses the standard AES
+  decryption tables Td0-Td3 and the standard inverse S-box; a from-scratch equivalent
+  inverse-cipher decryption with the captured round keys reproduces the plaintext
+  byte-for-byte; standard `AES-128-ECB` with the recovered master key reproduces both
+  directions).
+- The **master key** is:
+
+  ```
+  aes_key = SHA-256( 62466e8d || Y || session_key || M )[:7]  +  b"\x00" * 9
+  ```
+
+  i.e. the first 7 bytes of that KDF output, right-padded with zeros to 16 bytes.
+  Verified across independent sessions (the driver even runs the AES key schedule on
+  this 7-non-zero-byte key).
+- Blocks are processed with AES-128-ECB.
+
+With the handshake accepted and this channel key, the driver can now encrypt/decrypt
+the post-handshake `00 80` exchange and the on-chip command traffic. The only layer
+left is the application protocol: the enroll and verify command set carried over this
+AES channel, then wiring it into `libfprint`'s match-on-chip API. No cryptographic
+unknowns remain.

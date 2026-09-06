@@ -133,3 +133,13 @@ if __name__ == "__main__":
     print("live challenge:", challenge.hex())
     print("device key    :", dk.hex())
     usb.util.release_interface(dev,0)
+
+
+def channel_key(Y: bytes, session_key: bytes) -> bytes:
+    """Derive the AES-128-ECB channel key for the post-handshake session.
+
+    aes_key = SHA-256(62466e8d || Y || session_key || M)[:7] + b"\x00"*9
+    Verified against hardware. Channel is AES-128-ECB.
+    """
+    kdf = hashlib.sha256(bytes.fromhex("62466e8d") + Y + session_key + M).digest()
+    return kdf[:7] + b"\x00" * 9
