@@ -153,3 +153,43 @@ With the algorithm known and the device acting as an oracle (`tools/oracle.py`),
 these are a bounded number of experiments rather than open research. No vendor
 secret is involved at any step — only the device's own public key, a SHA-256, and
 fresh randomness.
+
+## Frame-11 exact recipe (dynamic instrumentation) + the remaining blocker
+
+Hooking the vendor engine's SHA-256 init/update/final in a live handshake (Frida on
+the WBF engine `svchost`, hooks at UPKBU RVAs `0x1ddbac`/`0x1ddbf0`/`0x1de990`) gives
+the frame-11 authenticator byte-for-byte. Correlating with the USB capture, the
+32-byte authenticator is:
+
+```
+auth32 = SHA-256( ctr4 || M || Y )
+```
+- `ctr4` = `e3 8f 7c b3` — a constant domain-separation tag (first byte matches the
+  `0xe3` seen statically; verified identical across handshakes).
+- `Y`   = the 32-byte reply to the `07 04` command (the device's per-session value).
+- `M`   = a **32-byte long-term secret** (`94 1c f8 d6 …`), constant across handshakes,
+  never transmitted, not derivable from any captured/handshake data.
+
+The RSA half is `RSA-512-PKCS1v15-encrypt(device_pubkey, session_key)` where the
+session key is **48 bytes** (`local_1d0 - 0x10`, not 32) of DRBG output. The 64-byte
+device modulus arrives little-endian in frame 6.
+
+`tools/frame11_build.py` synthesises a complete frame-11 from a live session using the
+above and submits it to the device.
+
+### The remaining blocker: how `M` gets into the device
+
+Reconstructing frame-11 with the correct `SHA-256(ctr4 || M || Y)` (fresh live `Y`, the
+extracted constant `M`) is **rejected by the device** when driven from Linux — with the
+same authenticator-failure code as a deliberately wrong hash. Yet the same `M`/`ctr4`
+are what the Windows driver uses successfully.
+
+A diagnostic (correct-hash vs wrong-hash, both with a dummy RSA block) returns the
+**same** error, i.e. the device rejects at the authenticator step. Conclusion: `M` is
+**not persistent in the sensor across a real USB reset** — the Windows stack must load
+or establish `M` in the device during an initialisation/pairing step that this project
+does not yet replicate (a QEMU virtual re-plug preserved `M`; a Linux `unbind`/`bind`
+does not). Finding and replaying that `M`-establishment exchange is the one remaining
+piece between here and a completed handshake. Everything downstream (the exact RSA
+byte order/exponent, the AES channel, on-chip enroll/verify) follows once the device
+accepts frame-11.
