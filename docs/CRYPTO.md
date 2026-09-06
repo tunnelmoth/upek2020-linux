@@ -286,3 +286,25 @@ Linux driver.
 
 No vendor private key is used anywhere; every secret is either public (the device's
 own key), the device's persistent `M`, or freshly generated randomness.
+
+## Windows capture of enroll/verify: ruled out (hard VM limitation)
+
+A full TPM 2.0 + Secure Boot + VBS + nested-Hyper-V setup was built and verified in
+the reference VM (`TpmEnabled`, `Confirm-SecureBootUEFI`, `HypervisorPresent` all true,
+VBS `status=1`). Despite this, the Windows Biometric secure component stays
+`NOT_SUPPORTED` (event 1600, reason 396, `0x80070032`) and the biometric unit never
+comes online (`set mode` / `configure unit` fail `0x80004005`). The emulated TPM plus
+nested VBS cannot provide the hardware-attested secure biometric enclave the WBF secure
+component requires. Consequently **Windows never issues any enroll/verify command** in
+the VM, so those cannot be captured there. The path to the application protocol is the
+live Linux device (see `tools/session.py`), which now answers every command.
+
+## Application layer: operation vocabulary (from the engine adapter)
+
+The engine exposes these operations, which map onto channel commands:
+`bioframe/devices/action/scan` (capture a swipe), `capture`, `consolidated-capture`,
+`template`, `match`, `image`, `enroll`, `verify`, plus parameters `ScanDpiX/Y`,
+`FingerIndex`, `FingerId`, `fingerpresent`, `TemplateHash`, `WinBioAdapterTemplateId`,
+`PreparedPublicData`. Mapping each to its channel command code and the enroll/verify
+state machine is the remaining reverse — mechanical, no cryptography — best done against
+the live device via `tools/session.py` (the info command `0c` is already working).
