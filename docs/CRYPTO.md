@@ -107,3 +107,49 @@ Steps 1-3 are careful decompiler work over the BSAPI module plus a few more
 capture cycles against real hardware (the harness can act as an oracle, since the
 device accepts or rejects each candidate response). No cryptographic barrier
 remains between here and a working driver.
+
+## The frame-11 crypto — fully reversed
+
+Decompilation of the engine module (function at RVA `0x1d0ee0`) yields the exact
+construction of the 96-byte crypto payload. It is **not** a single RSA block; it is
+a hash + RSA composite:
+
+```
+payload (96 bytes) =
+      SHA-256( ctr4 || challenge || Y )            # 32 bytes
+   || RSA-512-PKCS1v15-encrypt( device_pubkey, session_key )   # 64 bytes
+```
+
+where
+- `session_key` = 32 random bytes from the driver's SHA-based DRBG (seeded by
+  `CryptGenRandom`).
+- `device_pubkey` = the RSA-512 public key the device streams in handshake frame 6
+  (the 64-byte value after `03 00 20 00 20 00`).
+- `Y` = a 32-byte value fetched from the device with an internal command (`0x407`).
+- `ctr4` = a 4-byte constant/counter prefix.
+- RSA padding is **PKCS#1 v1.5 block type 2** (`00 02 <random non-zero> 00 <msg>`),
+  confirmed in the padding routine (block type byte `2`, random `1..0xFF` filler,
+  `00` separator, message right-aligned).
+- Hash is **SHA-256** (32-byte output; the module's hash-type tag `0x12`).
+
+The whole payload is sent as transceive command `0x308` (which is why the frame
+command bytes read `08 03`). The device then replies, and the host **verifies** it by
+recomputing `SHA-256( ctr4' || challenge || session_key )` and comparing to the
+device's 32-byte answer — i.e. the device proves it decrypted the session key.
+
+Object model note: the engine wraps primitives in tagged objects — tag `0x50` = the
+RSA key/cipher, tags `0x11`/`0x12` = hash contexts. `RSAPublicKeyImpl` /
+`RSAEncryptSink` do the public-key encryption; `Rijndael` (AES) carries the
+post-handshake channel.
+
+### Still to pin down (oracle-testable)
+
+- RSA public exponent (`3` vs `65537`), and the byte order of the frame-6 modulus.
+- The exact `ctr4` prefix bytes and the `0x407` `Y` value (or whether `Y` equals a
+  value already seen earlier in the handshake).
+- Session-key length (32 vs variable).
+
+With the algorithm known and the device acting as an oracle (`tools/oracle.py`),
+these are a bounded number of experiments rather than open research. No vendor
+secret is involved at any step — only the device's own public key, a SHA-256, and
+fresh randomness.
