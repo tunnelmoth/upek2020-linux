@@ -149,3 +149,57 @@ behind `.rdata` factory vtables (`FUN_1801c8328`, classids 0x64..0x3e9). Without
 the right operation handle from a successful begin-operation, every grab returns
 -0x427 (engine not armed) and every control command returns -0x21 (bad param).
 This is the one remaining piece before a live fingerprint capture.
+
+## Low-level "type-nibble" transport (operation layer)
+
+The capture/scan OPERATION does not use the AES command channel. It uses a second,
+lower framing over the same bulk endpoints (`tools/lowlevel.py`):
+
+```
+"Ciao" | hdr0 hdr1 hdr2 | payload | crc16
+  hdr0 = frame TYPE (low nibble)
+  hdr1 = seq(7:4) | length[10:8](2:0)
+  hdr2 = length[7:0]
+  crc16 = CRC-16/CCITT, little-endian, over hdr0..payload
+```
+
+Frame types: 0=DATA, 1=IDLE, 2=STATUS/ERROR(s16 code), 3=READY, 4=host-DATA,
+5=RESULT, 6=host START, 7=host ABORT, 8=BUSY, 9/10=keep-alive(no-finger/finger),
+0xb=EVENT. The AES and low-level framings must not be interleaved — mixing
+corrupts state.
+
+Verified handshake (device is the oracle; CRCs match byte-for-byte):
+
+```
+type-7 abort  4369616f 070001 00 1c62   -> device type-1 idle
+type-6 start  4369616f 060000    a0b2   -> device type-3 ready, payload 01000000c0
+type-4 data   [01][00][u32 timeout][u16 maxframe][echo type-3 payload]
+                                          -> device type-5 result, payload 00 (success)
+```
+
+**Open limit:** this type-6/4/5 exchange (on-chip SM `FUN_1801e03c0`) returns
+success regardless of finger state and delivers no image. The raw-image streaming
+SM (`FUN_1801e12a4`/`FUN_1801e07d8`, type-0 DATA + type-8/9/10 poll) is selected by
+higher-layer Grabber config, and the actual sensor read is a transport-object
+callback (vtable +0x38) implemented in the lower USB/WinUSB function driver, which
+is not part of the decompiled `upkbu.dll`/`tcwbf.dll`. Reconstructing the final
+scan trigger therefore needs a low-level usbmon capture of the Windows driver, not
+just these DLLs.
+
+## Advanced DES image-cipher handshake (spec, not yet exercised)
+
+Image-data frames (AES-channel command-word nibble 8) are DES-encrypted with a key
+installed by an advanced key-negotiation that a plain (basic) session skips:
+
+1. `0x407` get 8 random bytes `R_dev`.
+2. `R_host` = 8 random bytes; `des_key = 37 EA 23 CE D3 40 C4 AE` (embedded in the DLL).
+3. `0x408` body = `DES-CBC(des_key, IV=R_dev, PKCS7( R_host(8) || le32(0) || 8×00 ))`
+   (24 bytes). Device echoes `R_dev` in the reply on success.
+4. `pre_key = KDF(R_dev, R_host, des_key)` — SHA-1 rounds over
+   `prev20 || R_dev || R_host || des_key`, take digest bytes [3,7,11,15] per round,
+   reversed fill, 32 bytes; `data_key = odd_parity(pre_key[:8])`.
+5. `0x416` body = `le32(0x21) || le32(0x38) || le32(0) || le32(3)` — installs the DES
+   image cipher at deviceObj+0x2a0; the AES command channel is untouched.
+6. Image frames then decrypt with `DES-CBC(data_key, IV=0)`, IV chained across frames.
+
+The command channel stays AES-128-CBC; DES applies only to bulk image frames.
