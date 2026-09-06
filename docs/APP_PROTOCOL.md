@@ -125,3 +125,27 @@ body = mode(u32) + subop(u8=0) + flags(u16=0x0001)   # flag bit0 = capture-enabl
 
 Templates are referenced on the wire as a tagged object:
 `03 00 00 00 <u32 len> <bytes>` (blob) or `80 00 00 00 <u32 id>` (slot id).
+
+## Async operations & transport class (partial — capture blocker)
+
+Simple commands (info/caps/status/enumerate/config) are synchronous and use
+transport-frame byte **b6=0x17**. The capture/enroll/verify **operations**
+(0x20e/0x208/0x216 grab, 0x220/0x21c begin-operation, 0x212/0x201 control) are
+driven by an asynchronous, callback-based transport and need a **different b6**.
+
+Verified on hardware: `0x220 begin-operation` sent with b6=0x17 makes the device
+answer with a short control frame `Ciao 02 00 02 92 <b> + crc16` (b7=0x92) instead
+of a normal reply; sent with **b6=0x27** it returns a normal encrypted reply. So
+the transport class is encoded in b6.
+
+Async command word (first 4 bytes of the decrypted app block, LE u32):
+`nibble(31..28) | opcode(27..16) | status(15..0)`. Nibble `2` = notification (host
+must send a `0x30000000` continuation), `8` = image/data body, `3` = host
+continuation, else = terminal reply (status = low 16 bits, signed).
+
+**Open blocker:** the begin-operation (0x220) exact `verb` + descriptor and the
+0x212/0x211 `opcode` are held in the driver's C++ `Bio::Pt::GrabberImpl` layer
+behind `.rdata` factory vtables (`FUN_1801c8328`, classids 0x64..0x3e9). Without
+the right operation handle from a successful begin-operation, every grab returns
+-0x427 (engine not armed) and every control command returns -0x21 (bad param).
+This is the one remaining piece before a live fingerprint capture.

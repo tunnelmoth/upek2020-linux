@@ -112,6 +112,36 @@ def appcmd(code, body=b""):
     return content + bytes(pad)
 
 
+def raw_block(word, body=b""):
+    """Build an app block for an arbitrary 32-bit command word (not just a code).
+
+    Same envelope as appcmd() but the leading 4 bytes are the raw LE `word`.
+    Used for async continuation frames whose word is 0x30000000 (nibble 3),
+    which is not of the (code&0xfff)<<16 form.
+    """
+    cw = word.to_bytes(4, "little")
+    tok = hashlib.sha256(cw + body).digest()[:4]
+    n = len(body)
+    enc_len = (24 + n) & ~15
+    content = cw + body + tok
+    pad = bytearray(enc_len - len(content))
+    if pad:
+        pad[-1] = len(pad) - 1
+    return content + bytes(pad)
+
+
+# async transport: command-word top nibble (bits 31..28 of the leading LE word)
+NIB_DATA = 0x8   # encrypted image/data body follows
+NIB_NOTIFY = 0x2  # notification — host must send a 0x30000000 continuation
+CONT_WORD = 0x30000000  # host continuation word (nibble 3)
+
+
+def word_nibble(dec):
+    if not dec or len(dec) < 4:
+        return None
+    return (int.from_bytes(dec[0:4], "little") >> 28) & 0xf
+
+
 def is_nak(dec):
     return dec is not None and dec[:8] == NAK[:8]
 
@@ -288,6 +318,34 @@ class Upek:
             # any other status: hard error, stop
             return None
         return None
+
+    def async_stream(self, code, body, ack_fn=None, timeout_s=30.0, tmo=400):
+        """Drive an asynchronous operation (0x216 stream / 0x212 begin-op) through
+        the continuation loop.
+
+        The device replies with notification frames (word nibble 0x2); for each,
+        the host sends a 0x30000000 continuation carrying a 1-byte ack, until a
+        terminal frame (nibble != 0x2) arrives. Image/feature data rides in
+        nibble-0x8 frames in between. `ack_fn(dec)->int` decides the ack byte
+        (default 1 = keep going).
+
+        NOTE: this requires the sensor to be armed first via the operation-open
+        prologue; issued cold, the op command terminates immediately with an error.
+        """
+        dec, raw = self.cmd(appcmd(code, body), tmo=tmo)
+        deadline = time.time() + timeout_s
+        blobs = []
+        while time.time() < deadline:
+            if dec is None or is_nak(dec):
+                return None, blobs
+            nib = word_nibble(dec)
+            if nib == NIB_DATA:
+                blobs.append(dec[4:])
+            elif nib != NIB_NOTIFY:
+                return status16(dec), blobs   # terminal
+            ack = 1 if ack_fn is None else ack_fn(dec)
+            dec, raw = self.cmd(raw_block(CONT_WORD, bytes([ack])), tmo=tmo)
+        return None, blobs
 
     def close(self):
         try:
