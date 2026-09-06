@@ -75,3 +75,35 @@ match-on-chip driver is feasible. The remaining work is engineering, not secrets
 recover the exact frame-11 blob layout and the AES key-derivation, then the on-chip
 enroll/verify command set, and expose it through `libfprint`'s device-storage
 (match-on-chip) API.
+
+## Deeper reversing status
+
+Static analysis of the BSAPI layer refines the picture without changing the verdict:
+
+- Crypto-API profile (BSAPI module): `CryptGenRandom` x3, `CryptImportKey` x1,
+  `CryptVerifySignature` x1; `CryptEncrypt` / `CryptDecrypt` / `CryptDeriveKey` = **0**.
+- Inlined crypto classes: `InvertibleRSAFunction` (x23), `Rijndael`/AES (x4).
+- The embedded RSA-512 trust key is used to verify signed **SCE (Secure Crypto
+  Element) plugin DLLs** (`sce*.dll`, entry `SceDllGetInfo1`) — a signed-code
+  gate, not the device channel itself.
+
+The presence of `InvertibleRSAFunction` (RSA with private-key capability) does not
+imply a vendor secret: there is still **zero** embedded private-key material of any
+kind, so any private-key RSA use is necessarily on an **ephemeral keypair the host
+generates itself** at runtime (via `CryptGenRandom`). That needs no vendor secret.
+The feasibility verdict stands.
+
+## Roadmap to a working driver
+
+1. Recover the frame-11 (crypto response) blob layout: how the 32-byte challenge,
+   the fresh session key, and the RSA operation combine into the 96 bytes.
+2. Recover the AES (Rijndael) session-key derivation and the channel framing/MAC.
+3. Recover the post-session on-chip enrollment and verification command set.
+4. Implement in a native `libfprint` driver using the match-on-chip
+   (device-storage) API — the fingerprint image stays on the chip; the driver
+   drives enroll/verify and reads back templates/results.
+
+Steps 1-3 are careful decompiler work over the BSAPI module plus a few more
+capture cycles against real hardware (the harness can act as an oracle, since the
+device accepts or rejects each candidate response). No cryptographic barrier
+remains between here and a working driver.
