@@ -203,3 +203,44 @@ installed by an advanced key-negotiation that a plain (basic) session skips:
 6. Image frames then decrypt with `DES-CBC(data_key, IV=0)`, IV chained across frames.
 
 The command channel stays AES-128-CBC; DES applies only to bulk image frames.
+
+## Capture architecture — the full object stack (from RE)
+
+The physical scan and image delivery are split across the two DLLs and a lower
+WUDF/UMDF driver:
+
+- `deviceObj` (magic `'LhDd'`, upkbu) = the type-nibble protocol engine. Field
+  `+0x88` = operation MODE (0/0xff = on-chip TYPE-6/4/5 path; 1/2 = raw-image
+  streaming). `+0x24` = session-armed, `+0x84` = streaming-enabled, `+0xb4` = TYPE-0
+  seq counter.
+- `transportObj` = `*(deviceObj+8)` (magic `'SIfc'`, tcwbf) — its vtable slots are
+  the hardware ops: +0x38 finger-sense (a `WaitForMultipleObjects` on Win32 events,
+  NOT a wire frame), +0x40 TYPE-4 challenge buffer, +0x58/+0x60 USB read/write,
+  +0x80 arm (sensor register cmd 2), +0x88 LED (register cmd 1).
+- `'SuTr'` USB transport (tcwbf) — spawns a background overlapped bulk-read thread
+  that pushes TYPE-0/TYPE-0x0b image frames and signals a finger-ready event. This
+  thread + the raw pipe I/O are the ONLY piece not in the DLLs (it lives in the
+  lower WUDF driver, reached via a `DP%08X` COM property store + DeviceIoControl
+  IOCTLs 0x350c060/0x350c064). Driving EP 0x02/0x81 directly REPLACES this module.
+
+### Why TYPE-6/4/5 never yields pixels
+
+TYPE-6/4/5 is the on-chip (template-domain) match/enroll path. The image is
+consumed on-chip; TYPE-5 `00` just means "on-chip op done". No pixels cross it.
+The TYPE-3 payload `01 00 00 00 c0` sets bit31 ("host must append a challenge
+response to TYPE-4"); the `+0x40` callback returns a pre-registered crypto blob,
+not scan params — so no TYPE-4 content makes it scan.
+
+### The raw-image path (what actually captures)
+
+1. Sensor ARM = sensor-REGISTER writes (finger-detect enable, bias, scan enable,
+   LED) via the tcwbf register map (`FUN_180090728`/`FUN_180090c6c`), plus an
+   `'MVNS'` (0x534e564d) NV/config load — all carried as commands over the bulk
+   channel the host already drives.
+2. Then the firmware pushes image lines as TYPE-0 / TYPE-0x0b frames; TYPE-8 = busy
+   (answer TYPE-9/10 keepalive). Host reads EP 0x81 continuously.
+
+The remaining work to capture from Linux is to replicate the sensor-register arm
+sequence (addresses/values are sensor-descriptor data in tcwbf) and pump the TYPE-0
+channel. Interrupt EP 0x83 is unused for image data in the stock driver (it polls
+bulk), so its silence is expected.
