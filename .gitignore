@@ -5,3 +5,5 @@
 *.qcow2
 *.iso
 blobs/
+__pycache__/
+*.pyc
