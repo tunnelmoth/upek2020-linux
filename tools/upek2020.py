@@ -221,7 +221,11 @@ class Upek:
         return out
 
     # --- session bring-up -------------------------------------------------------
-    def handshake(self):
+    def handshake(self, fmt=0x31):
+        # fmt is the session image-format field in the 0x308 open. 0x31 opens a
+        # raw-image-grab session (capture over the low-level frame channel);
+        # fmt=0 opens a managed session where the on-chip template/object
+        # subsystem (create_obj/db_desc/begin-op/consolidate) is live.
         d = self.d
         d.ctrl_transfer(0xc0, 0x04, 0, 0, 8, 1000); d.ctrl_transfer(0xc0, 0x04, 0, 0, 8, 1000)
         d.ctrl_transfer(0x40, 0x0c, 0x0100, 0x0400, b"\x00", 1000); self._drain(2, 400)
@@ -238,8 +242,14 @@ class Upek:
             if i == 4:
                 j = r.find(b'\x07\x14'); Y = r[j + 2:j + 2 + 32]
         sk = secrets.token_bytes(48)
-        content = (bytes.fromhex("08030100000001000000310000003800000000000000030000000000000060000000")
-                   + hashlib.sha256(CTR + M + Y).digest() + _rsa(devkey, 17, sk))
+        # 0x308 body: code(2) | u32[0]=1 | u32[1]=1 | u32[2]=fmt | u32[3]=bpp 0x38 |
+        # u32[4]=0 | u32[5]=3 | u32[6]=0 | u32[7]=0x60. fmt selects raw vs managed.
+        body308 = (b"\x08\x03"
+                   + (1).to_bytes(4, "little") + (1).to_bytes(4, "little")
+                   + fmt.to_bytes(4, "little") + (0x38).to_bytes(4, "little")
+                   + (0).to_bytes(4, "little") + (3).to_bytes(4, "little")
+                   + (0).to_bytes(4, "little") + (0x60).to_bytes(4, "little"))
+        content = (body308 + hashlib.sha256(CTR + M + Y).digest() + _rsa(devkey, 17, sk))
         self._wr(self._bf(0, 0x40, 0x87, content)); time.sleep(0.05)
         resp = b"".join(self._drain(8, 800))
         assert resp[12:14] == b'\x08\x13', "frame-11 rejected: " + resp[12:20].hex()
