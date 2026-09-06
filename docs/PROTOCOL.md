@@ -74,3 +74,22 @@ cryptographically bound to the live challenge.
 - Host crypto response: 96 bytes (`0x60`), preceded by length fields `0x31`, `0x38`.
 - Device static key material: 64 bytes = RSA-512 modulus.
 - Embedded trust key: RSA-512.
+
+
+## Frame CRC (solved)
+
+The 2-byte trailer is **CRC-16/CCITT**: polynomial `0x1021`, init `0x0000`, no
+input/output reflection, no final XOR. It is computed over the frame **after** the
+4-byte `Ciao` magic, up to (but not including) the trailer, and stored
+**little-endian**. The 32-bit length field counts the content **plus** the 2 CRC
+bytes. `tools/oracle.py:build_frame()` reproduces every captured frame, including
+the 144-byte crypto frame, byte-for-byte.
+
+```
+frame = "Ciao" | seq | sub | b6 | 0x28 | len32_LE | content | crc16_LE
+crc16   = CRC-16/CCITT(seq .. end-of-content)
+len32   = len(content) + 2
+```
+
+With this, the entire transport is reproducible from Linux. The only remaining
+unknown for a completed handshake is the 96-byte crypto payload inside frame 11.
