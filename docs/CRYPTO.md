@@ -254,3 +254,35 @@ the post-handshake `00 80` exchange and the on-chip command traffic. The only la
 left is the application protocol: the enroll and verify command set carried over this
 AES channel, then wiring it into `libfprint`'s match-on-chip API. No cryptographic
 unknowns remain.
+
+## The application layer is now in the clear
+
+With the AES channel key, the post-handshake command traffic decrypts to a
+structured command protocol that mirrors the transport (`XX 04` request /
+`XX 14` reply):
+
+```
+host -> device (decrypted):  00 00 0c 04 | 05 00 00 00 | <value> | 00 00 00 03
+device -> host (decrypted):  00 00 0c 14 | 80 00 00 00 | 03 01 03 00 | 01 01 01 03 | <data blocks...>
+```
+
+Every byte of the session is now readable. What remains is purely the *application*
+protocol — the specific command codes for enrollment and verification and the
+device's result encoding — with **no cryptography left to break**. That, plus wiring
+the result into `libfprint`'s match-on-chip (device-storage) API, completes a native
+Linux driver.
+
+## Summary of the cryptographic stack (all solved)
+
+| Layer | Result |
+|---|---|
+| USB bring-up / mode switch | vendor control `40 0c` |
+| Transport framing | "Ciao" + CRC-16/CCITT |
+| Device authentication | host verifies device sig with embedded RSA-512 trust key |
+| Handshake auth (frame-11) | `SHA-256(ctr4 ‖ M ‖ Y)` |
+| Handshake key transport | `RSA-512-PKCS1v15(device_key, 48-byte session key)`, e=17 |
+| Device confirmation | `SHA-256(bd30142a ‖ M ‖ session_key)` |
+| Session channel | `AES-128-ECB`, key `SHA-256(62466e8d ‖ Y ‖ sk ‖ M)[:7]‖0×9` |
+
+No vendor private key is used anywhere; every secret is either public (the device's
+own key), the device's persistent `M`, or freshly generated randomness.
