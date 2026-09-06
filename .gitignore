@@ -1,0 +1,7 @@
+*.dll
+*.exe
+*_decomp.c
+*.pcap
+*.qcow2
+*.iso
+blobs/

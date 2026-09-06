@@ -1,0 +1,25 @@
+# One full handshake, host<->device. Captured live from Linux (tools/harness.py).
+# Direction H->D = host to device, D->H = device to host.
+# Frames 0-9 are static (identical every session); 10+ are per-session crypto.
+
+D->H hello      : 4369616f03000501000000c069f8...        # device hello, cap byte c0 69 f8
+H->D host_hello : 4369616f04000801005e01000000000d65
+D->H ack        : 4369616f05000101559f
+H->D get_info   : 4369616f00000728040000000604c0d6
+D->H info       : 4369616f0000372834000000 0614 55020105 55020105 0d0000206f0107003a...
+                  #                          ^info  ^ver 05 02 01 05
+H->D read_02    : 4369616f00100b280800000002040b0000006556
+D->H devkey     : 4369616f001059285600000002144e00000050000000 03 00 20 00 20 00 \
+                  89f32f6172f6d0a6f24f55f28cd74936b30711000105de2593dbd27e0e5b48c77125a560 \
+                  ce7ce97d656d11dbe7523efce3663728dec780922ee9494b7ead79c001001100026f
+                  # ^ device static RSA-512 public key material (64B: 20 00 20 00 => 32+32)
+H->D read_51    : 4369616f00200b280800000051040a00000079a5
+D->H obj51      : 4369616f00201b2818000000 5114 100000000100070000000000000000000000000086f3
+H->D req_chal   : 4369616f00300b28080000000704200000005d11
+D->H CHALLENGE  : 4369616f00302728240000000714 \
+                  bb3f6345711028bacf7b65fb8633520fdbe19c6ac646b060fb0badd5710f362a1
+                  # ^ 32-byte per-session challenge (differs every run)
+H->D crypto_rsp : 4369616f004087288400000008030100000001000000310000003800000000000000 \
+                  0300000000000000 60000000 <96 bytes: RSA-encrypt(session-key||challenge, device pubkey)>
+                  # ^ challenge-bound; replaying another session's value is rejected
+D->H accept     : 4369616f004... 0813 20000000 <32B>     # success; short "0813 <err>" = reject
