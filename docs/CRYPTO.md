@@ -206,3 +206,24 @@ Remaining to a full driver: the AES session channel that follows frame-11, and t
 on-chip enroll/verify command set. `M` is device-specific; deriving/establishing it
 for an arbitrary unpaired sensor is a separate question, but for a sensor already
 paired under Windows it is a fixed value that can be read once.
+
+## Post-handshake: the AES session channel (next layer)
+
+After frame-11 is accepted, the device sends its 32-byte confirmation
+`SHA-256(bd30142a || M || session_key)` (verified against hardware), and a final
+`00 80` exchange opens an encrypted channel that carries the on-chip enroll/verify
+commands:
+
+```
+host -> Ciao ... 00 80 <16-byte AES block>
+dev  -> Ciao ... 00 80 <longer AES payload>
+```
+
+The channel key derives from the 48-byte session key via the driver's SHA-256 KDF
+(`SHA-256(62466e8d || Y || session_key || M)` is the leading candidate). Offline
+analysis (every KDF hash output as an AES-128/192/256 key, across ECB/CBC/CFB/OFB/CTR
+and several IVs) did **not** recover the plaintext, so the exact key/mode/IV needs the
+same live-instrumentation treatment that cracked the RSA: hook the Rijndael block
+operation in a running handshake to capture (key, plaintext, ciphertext) directly.
+This is the next concrete task; there is no cryptographic uncertainty left, only the
+channel's exact key schedule and framing.
