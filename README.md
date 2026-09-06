@@ -14,12 +14,15 @@ feasible.
 
 | Milestone | State |
 |---|---|
-| Drive the device from Linux (mode switch + transport) | **done** — see `tools/harness.py` |
+| Drive the device from Linux (mode switch + transport) | **done** — `tools/harness.py` |
 | Reach the per-session crypto challenge | **done** |
-| Prove no host secret is required (no "wall") | **done** — see `docs/CRYPTO.md` |
+| Prove no host secret is required (no "wall") | **done** — `docs/CRYPTO.md` |
 | Extract the embedded trust-anchor public key | **done** — `data/trust_key.pem` |
-| frame-12 blob layout + AES channel derivation | in progress |
-| on-chip enroll / verify command set | todo |
+| frame-11 auth + AES-128-CBC session channel | **done** — `docs/CRYPTO.md` |
+| Application-command envelope (SHA-256 token) | **done** — `docs/APP_PROTOCOL.md` |
+| Full command set unlocked (info/caps/status/enum/capture/...) | **done** — `tools/upek2020.py` |
+| Capture command (0x20e) drives the sensor to poll for a swipe | **done** — returns no-finger status; live template read pending a physical swipe |
+| on-chip enroll / verify state machine | in progress — commands mapped, live validation pending |
 | `libfprint` match-on-chip driver | todo |
 
 ## The headline result
@@ -36,25 +39,37 @@ without any vendor private key**. There is no cryptographic wall. See `docs/CRYP
 ## Layout
 
 ```
-docs/PROTOCOL.md     the "Ciao" transport framing and the full handshake sequence
-docs/CRYPTO.md       the crypto model, the feasibility proof, the extracted trust key
-docs/METHODOLOGY.md  how it was captured and reversed (VM + usbmon + Ghidra)
-tools/harness.py     user-space libusb harness: init -> live challenge
-tools/usbpcap.py     minimal usbmon pcap decoder (linktype 220)
-data/handshake.txt   one fully-decoded handshake, annotated
-data/trust_key.pem   the RSA-512 trust anchor extracted from the driver
+docs/PROTOCOL.md      the "Ciao" transport framing and the full handshake sequence
+docs/CRYPTO.md        the crypto model, the feasibility proof, the extracted trust key
+docs/APP_PROTOCOL.md  application-command envelope (SHA-256 token), command map, capture
+docs/METHODOLOGY.md   how it was captured and reversed (VM + usbmon + Ghidra)
+tools/upek2020.py     the driver: handshake + AES channel + app commands + capture poll
+tools/harness.py      user-space libusb harness: init -> live challenge
+tools/usbpcap.py      minimal usbmon pcap decoder (linktype 220)
+data/handshake.txt    one fully-decoded handshake, annotated
+data/trust_key.pem    the RSA-512 trust anchor extracted from the driver
 ```
 
 ## Quickstart
 
 ```
-sudo apt install python3-usb libusb-1.0-0      # or your distro's equivalent
-sudo python3 tools/harness.py
+sudo apt install python3-usb python3-pycryptodome libusb-1.0-0   # or distro equivalent
+sudo python3 tools/upek2020.py
 ```
 
-Expected: the device replies to `get_info`, streams its static public key, and
-finally emits a fresh 32-byte challenge — the point where the cryptographic
-session begins.
+Expected output — the full encrypted session comes up and the device identifies
+itself and reports its on-chip template store:
+
+```
+channel up
+status: ...4c656e6f766f2054434435312d5443533544...
+ascii : ...Lenovo TCD51-TCS5D POA...
+info(5): 0301030001010103...
+enrolled templates on chip: 0
+```
+
+`tools/harness.py` remains as the minimal transport-only bring-up (init -> live
+32-byte challenge) if you want to inspect the handshake in isolation.
 
 ## Scope and ethics
 

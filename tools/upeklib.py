@@ -65,17 +65,31 @@ class Upek:
         aeskey=hashlib.sha256(bytes.fromhex("62466e8d")+Y+sk+M).digest()[:7]+b"\x00"*9
         self.txc=AES.new(aeskey,AES.MODE_CBC,b"\x00"*16)
         self.rxc=AES.new(aeskey,AES.MODE_CBC,b"\x00"*16)
+    def _frames(self, r):
+        out=[]; i=0
+        while True:
+            j=r.find(b"Ciao", i)
+            if j<0 or j+12>len(r): break
+            lenf=int.from_bytes(r[j+8:j+12],"little")
+            content=r[j+12:j+12+lenf-2]
+            out.append((r[j+5], content))   # (sub, content)
+            i=j+12+lenf
+        return out
     def cmd(self, payload, tmo=800):
-        # payload: bytes, will be zero-padded to 16-multiple, CBC-enc, wrapped in 0080 frame
+        # payload: bytes, zero-padded to 16-multiple, CBC-enc, wrapped in 0080 frame.
+        # Reply parsed by exact Ciao length; every 0080 frame's ciphertext decrypted
+        # in order so the continuous rxc CBC stream stays in sync.
         pl=payload+b"\x00"*((16-len(payload)%16)%16)
         ct=self.txc.encrypt(pl)
         self._wr(self._bf(0,self.sub,0x17,bytes.fromhex("0080")+ct)); time.sleep(0.05)
         self.sub=(self.sub+0x10)&0xff
-        r=b"".join(self._drain(12,tmo))
-        j=r.find(bytes.fromhex("0080"),12)
-        if j<0: return None,r
-        ctb=r[j+2:]; nn=(len(ctb)//16)*16
-        return (self.rxc.decrypt(ctb[:nn]) if nn>=16 else b""),r
+        r=b"".join(self._drain(14,tmo))
+        dec=b""
+        for sub,content in self._frames(r):
+            if content[:2]==b"\x00\x80":
+                cip=content[2:]; nn=(len(cip)//16)*16
+                if nn>=16: dec+=self.rxc.decrypt(cip[:nn])
+        return (dec if dec else None), r
     def close(self): usb.util.release_interface(self.d,0)
 def channel_cmd(code16, param=b""):
     return bytes([0,0])+code16.to_bytes(2,"little")+param
