@@ -177,19 +177,32 @@ device modulus arrives little-endian in frame 6.
 `tools/frame11_build.py` synthesises a complete frame-11 from a live session using the
 above and submits it to the device.
 
-### The remaining blocker: how `M` gets into the device
+### SOLVED — the handshake completes from Linux
 
-Reconstructing frame-11 with the correct `SHA-256(ctr4 || M || Y)` (fresh live `Y`, the
-extracted constant `M`) is **rejected by the device** when driven from Linux — with the
-same authenticator-failure code as a deliberately wrong hash. Yet the same `M`/`ctr4`
-are what the Windows driver uses successfully.
+The rejection was **not** an `M` problem; `M` (`94 1c f8 d6 …`) is a persistent
+device secret that survives a real USB reset. The bug was the RSA exponent.
+Dumping the live RSA (Frida on the encrypt/padding/key-import routines) gave a
+matched (padded-block, ciphertext, modulus) triple, solved offline:
 
-A diagnostic (correct-hash vs wrong-hash, both with a dummy RSA block) returns the
-**same** error, i.e. the device rejects at the authenticator step. Conclusion: `M` is
-**not persistent in the sensor across a real USB reset** — the Windows stack must load
-or establish `M` in the device during an initialisation/pairing step that this project
-does not yet replicate (a QEMU virtual re-plug preserved `M`; a Linux `unbind`/`bind`
-does not). Finding and replaying that `M`-establishment exchange is the one remaining
-piece between here and a completed handshake. Everything downstream (the exact RSA
-byte order/exponent, the AES channel, on-chip enroll/verify) follows once the device
-accepts frame-11.
+```
+n = int.from_bytes(device_key_64, "little")     # modulus is little-endian
+e = 17    (0x11)                                 # NOT 3, NOT 65537
+padding  = PKCS#1 v1.5 block type 2 (00 02 <13 random non-zero> 00 <48-byte key>)
+ct = pow(int.from_bytes(block, "big"), 17, n).to_bytes(64, "big")
+```
+
+Full working frame-11:
+
+```
+payload(96) = SHA-256( ctr4=e38f7cb3 || M || Y ) || RSA(session_key)
+```
+
+Sent from Linux via `tools/oracle.py`, the device replies `08 13 20 00 00 00 …`
+— **accept**. The advanced-mode cryptographic handshake is reproduced natively on
+Linux with no vendor private key. `tools/oracle.py:build_response()` is the
+verified implementation.
+
+Remaining to a full driver: the AES session channel that follows frame-11, and the
+on-chip enroll/verify command set. `M` is device-specific; deriving/establishing it
+for an arbitrary unpaired sensor is a separate question, but for a sensor already
+paired under Windows it is a fixed value that can be read once.

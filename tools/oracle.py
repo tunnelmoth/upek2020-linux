@@ -46,16 +46,33 @@ def build_frame(seq: int, sub: int, b6: int, content: bytes) -> bytes:
     return head + content + crc
 
 
-def build_response(challenge: bytes, device_key: bytes) -> bytes:
-    """Return the 96-byte crypto payload for `challenge`. TO BE REVERSED.
+import hashlib, secrets
 
-    Known: device_key is the 64-byte value the device streams in frame 6
-    (candidate RSA-512 modulus / or an EC point pair -- unresolved).
-    Hypotheses to test against the oracle:
-      - RSA-512 PKCS1v15 encrypt of (session_key || challenge) with device_key
-      - 64-byte RSA block + 32-byte MAC/echo
+# Domain-separation tag and the device's long-term secret (device-specific, extracted).
+CTR4 = bytes.fromhex("e38f7cb3")
+M    = bytes.fromhex("941cf8d63afb0cff1a96531e9b28e5fe07147365e1bac869d4609cc9ad8a8804")
+
+def build_response(Y: bytes, device_key: bytes) -> bytes:
+    """Return the 96-byte frame-11 crypto payload. SOLVED and verified against
+    real hardware (device replies 08 13 20 = accept).
+
+    payload = SHA-256(CTR4 || M || Y)                          # 32 bytes
+           || RSA-encrypt(session_key)                          # 64 bytes
+    RSA: n = int(device_key, 'little'), e = 17, PKCS#1 v1.5 type 2,
+         session_key = 48 random bytes, ciphertext big-endian.
+    `Y` is the 32-byte reply to the 07-04 command; `device_key` is the 64-byte
+    value from frame 6.
     """
-    raise NotImplementedError("frame-11 builder not yet reversed")
+    h = hashlib.sha256(CTR4 + M + Y).digest()
+    n = int.from_bytes(device_key, "little")
+    sk = secrets.token_bytes(48)
+    ps = b""
+    while len(ps) < 64 - 3 - len(sk):
+        x = secrets.token_bytes(1)
+        if x != b"\x00": ps += x
+    block = b"\x00\x02" + ps + b"\x00" + sk
+    ct = pow(int.from_bytes(block, "big"), 17, n).to_bytes(64, "big")
+    return h + ct
 
 STATIC = ["4369616f04000801005e01000000000d65",
           "4369616f00000728040000000604c0d6",
