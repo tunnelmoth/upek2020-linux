@@ -22,8 +22,25 @@ feasible.
 | Application-command envelope (SHA-256 token) | **done** — `docs/APP_PROTOCOL.md` |
 | Full command set unlocked (info/caps/status/enum/capture/...) | **done** — `tools/upek2020.py` |
 | Capture command (0x20e) drives the sensor to poll for a swipe | **done** — returns no-finger status; live template read pending a physical swipe |
-| on-chip enroll / verify state machine | in progress — commands mapped, live validation pending |
-| `libfprint` match-on-chip driver | todo |
+| BIOS (keytype-0x21) POST session + single-DES-CBC channel | **done** — `tools/bios_session.py`, `docs/BIOS_SESSION.md` |
+| on-chip enroll / verify state machine | commands mapped; live capture blocked (see note) |
+| `libfprint` match-on-chip driver | scaffolded — `tools/upekdrv.py` |
+
+### Note: the analog wall (unit-specific)
+
+Both authenticated sessions come up and the full command set works, but on the
+unit tested **the analog sensor produces no signal on a finger** — the capture
+command polls `NO_FINGER` unchanged, and every finger-status channel (interrupt
+EP 0x83, the C0/04 status register, the frame channel) stays silent. The stock
+BIOS's exact POST session (keytype-0x21 handshake + DES channel + config +
+capture) was reimplemented from the BIOS module and replayed faithfully from
+Linux (`tools/bios_session.py`), and it does **not** change this. With the
+digital coprocessor fully functional, the physical sensor surface intact, and a
+byte-faithful BIOS-session replay not waking the analog front end, the evidence
+points to an **internal analog-path hardware fault** on this specific reader
+(dead front end, or a broken sensing-strip↔coprocessor connection). The protocol
+work stands and drives any working `147e:2020`; the missing piece here is
+hardware, not software.
 
 ## The headline result
 
